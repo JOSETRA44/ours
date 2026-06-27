@@ -135,6 +135,8 @@ class _WorkspaceEditorScreenState
                 ),
               ),
               const SizedBox(width: 16),
+              if (_isActive) const _MirrorActiveBadge(),
+              const SizedBox(width: 8),
               ActivationButton(
                 isActive: _isActive,
                 isLoading: isLoading,
@@ -177,10 +179,13 @@ class _WorkspaceEditorScreenState
                   onAdd: _addUrl,
                 ),
                 const SizedBox(height: 8),
-                _CaptureFromChromeButton(
-                  isCapturing: _capturingFromChrome,
-                  onPressed: _captureFromChrome,
-                ),
+                if (_isActive)
+                  const _MirrorInfoBanner()
+                else
+                  _CaptureFromChromeButton(
+                    isCapturing: _capturingFromChrome,
+                    onPressed: _captureFromChrome,
+                  ),
                 const SizedBox(height: 24),
                 PathEditorSection(
                   paths: _paths,
@@ -604,6 +609,76 @@ class _WorkspaceEditorScreenState
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _MirrorActiveBadge extends StatelessWidget {
+  const _MirrorActiveBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.green.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.4)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 6,
+            height: 6,
+            decoration: const BoxDecoration(
+              color: Colors.green,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'Mirror active',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: Colors.green.shade700,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MirrorInfoBanner extends StatelessWidget {
+  const _MirrorInfoBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.green.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.green.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.sync, size: 14, color: Colors.green.shade700),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Tabs are tracked automatically. '
+              'This list will update when you deactivate the workspace.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: Colors.green.shade700,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

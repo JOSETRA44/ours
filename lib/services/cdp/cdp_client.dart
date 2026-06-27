@@ -5,6 +5,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../core/constants/app_constants.dart';
 import '../../core/errors/cdp_exception.dart';
 import '../../core/utils/app_logger.dart';
+import '../../domain/models/cdp_event.dart';
 import '../../domain/models/cdp_tab.dart';
 
 class CdpClient {
@@ -12,6 +13,10 @@ class CdpClient {
   StreamSubscription<dynamic>? _sub;
   final _pending = <int, Completer<Map<String, dynamic>>>{};
   int _nextId = 0;
+
+  // Broadcast stream of CDP push events (targetCreated, targetDestroyed, etc.)
+  final _eventController = StreamController<CdpEvent>.broadcast();
+  Stream<CdpEvent> get events => _eventController.stream;
 
   bool get isConnected => _channel != null;
 
@@ -33,16 +38,15 @@ class CdpClient {
     }
 
     final json = jsonDecode(versionResponse.body) as Map<String, dynamic>;
-    appLogger.d('[CdpClient] Browser version: ${json['Browser']}');
+    appLogger.d('[CdpClient] Browser: ${json['Browser']}');
 
     final wsUrl = json['webSocketDebuggerUrl'] as String?;
     if (wsUrl == null) {
       throw CdpConnectionException(
-          'webSocketDebuggerUrl missing in /json/version — '
-          'Chrome may not have started with --remote-debugging-port');
+          'webSocketDebuggerUrl missing — Chrome may not have --remote-debugging-port');
     }
 
-    appLogger.d('[CdpClient] WebSocket URL: $wsUrl');
+    appLogger.d('[CdpClient] WS URL: $wsUrl');
     _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
     await _channel!.ready;
 
@@ -55,40 +59,42 @@ class CdpClient {
     appLogger.i('[CdpClient] Connected ✓');
   }
 
-  /// Opens a new tab and returns its CDP targetId.
+  /// Tells Chrome to start emitting Target events (targetCreated, targetDestroyed, etc.)
+  /// Must be called once after connect() to enable the mirror stream.
+  Future<void> enableTargetDiscovery() async {
+    await _send('Target.setDiscoverTargets', {'discover': true});
+    appLogger.i('[CdpClient] Target discovery enabled — events will stream');
+  }
+
   Future<String> createTab(String url) async {
-    appLogger.d('[CdpClient] Creating tab → $url');
+    appLogger.d('[CdpClient] createTab → $url');
     final result = await _send('Target.createTarget', {'url': url});
     final targetId = result['targetId'] as String;
-    appLogger.d('[CdpClient] Tab created → targetId=$targetId');
+    appLogger.d('[CdpClient] Tab created → $targetId');
     return targetId;
   }
 
-  /// Closes a tab by its CDP targetId. Silently ignores if already closed.
   Future<void> closeTab(String targetId) async {
-    appLogger.d('[CdpClient] Closing tab → $targetId');
+    appLogger.d('[CdpClient] closeTab → $targetId');
     try {
       await _send('Target.closeTarget', {'targetId': targetId});
-      appLogger.d('[CdpClient] Tab closed ✓');
     } catch (e) {
-      appLogger.d('[CdpClient] closeTab ignored (tab already gone): $e');
+      appLogger.d('[CdpClient] closeTab silently ignored: $e');
     }
   }
 
-  /// Returns raw target info for all attached targets.
   Future<List<Map<String, dynamic>>> listTargets() async {
     final result = await _send('Target.getTargets', {});
     return List<Map<String, dynamic>>.from(
         result['targetInfos'] as List? ?? []);
   }
 
-  /// Captures all open browser-page tabs (filters out DevTools, extensions, etc.).
-  /// This is the snapshot method for importing the current Chrome state.
+  /// Returns all open page-type tabs with navigable URLs.
   Future<List<CdpTab>> captureOpenTabs() async {
     appLogger.i('[CdpClient] Capturing open tabs...');
 
     final targets = await listTargets();
-    appLogger.d('[CdpClient] Total targets found: ${targets.length}');
+    appLogger.d('[CdpClient] Total targets: ${targets.length}');
 
     final tabs = targets
         .where((t) => t['type'] == 'page')
@@ -100,12 +106,10 @@ class CdpClient {
         .where((tab) => tab.isNavigable)
         .toList();
 
-    // ── Console snapshot log (requested for connectivity validation) ──
     appLogger.i('[CdpClient] ══════════════════════════════════════════');
-    appLogger.i('[CdpClient] CAPTURED TABS SNAPSHOT (${tabs.length} tabs)');
+    appLogger.i('[CdpClient] CAPTURED TABS (${tabs.length})');
     for (var i = 0; i < tabs.length; i++) {
       appLogger.i('[CdpClient]   [${i + 1}] ${tabs[i].url}');
-      appLogger.d('[CdpClient]        title="${tabs[i].title}" targetId=${tabs[i].targetId}');
     }
     appLogger.i('[CdpClient] ══════════════════════════════════════════');
 
@@ -117,17 +121,15 @@ class CdpClient {
     Map<String, dynamic> params,
   ) async {
     if (_channel == null) {
-      throw CdpConnectionException(
-          'Not connected to CDP. Call connect() first.');
+      throw CdpConnectionException('Not connected. Call connect() first.');
     }
 
     final id = ++_nextId;
     final completer = Completer<Map<String, dynamic>>();
     _pending[id] = completer;
 
-    final payload = jsonEncode({'id': id, 'method': method, 'params': params});
     appLogger.t('[CdpClient] → $method (id=$id)');
-    _channel!.sink.add(payload);
+    _channel!.sink.add(jsonEncode({'id': id, 'method': method, 'params': params}));
 
     return completer.future.timeout(
       const Duration(seconds: 10),
@@ -141,22 +143,30 @@ class CdpClient {
   void _handleMessage(dynamic raw) {
     final msg = jsonDecode(raw as String) as Map<String, dynamic>;
     final id = msg['id'] as int?;
-    if (id == null) {
-      // CDP event (Target.targetCreated, etc.) — ignore
-      return;
-    }
 
-    final completer = _pending.remove(id);
-    if (completer == null) return;
+    if (id != null) {
+      // Response to a command we sent
+      final completer = _pending.remove(id);
+      if (completer == null) return;
 
-    if (msg.containsKey('error')) {
-      final errMsg =
-          (msg['error'] as Map<String, dynamic>)['message'] as String;
-      appLogger.w('[CdpClient] ← error (id=$id): $errMsg');
-      completer.completeError(CdpException(errMsg));
+      if (msg.containsKey('error')) {
+        final errMsg =
+            (msg['error'] as Map<String, dynamic>)['message'] as String;
+        appLogger.w('[CdpClient] ← error (id=$id): $errMsg');
+        completer.completeError(CdpException(errMsg));
+      } else {
+        appLogger.t('[CdpClient] ← ok (id=$id)');
+        completer.complete((msg['result'] as Map<String, dynamic>?) ?? {});
+      }
     } else {
-      appLogger.t('[CdpClient] ← ok (id=$id)');
-      completer.complete((msg['result'] as Map<String, dynamic>?) ?? {});
+      // Push event from Chrome (no id)
+      final method = msg['method'] as String?;
+      if (method != null && !_eventController.isClosed) {
+        final params =
+            (msg['params'] as Map<String, dynamic>?) ?? {};
+        appLogger.t('[CdpClient] event: $method');
+        _eventController.add(CdpEvent(method: method, params: params));
+      }
     }
   }
 
@@ -171,8 +181,7 @@ class CdpClient {
   void _handleDone() {
     appLogger.w('[CdpClient] WebSocket closed');
     for (final c in _pending.values) {
-      c.completeError(
-          CdpConnectionException('WebSocket closed unexpectedly'));
+      c.completeError(CdpConnectionException('WebSocket closed unexpectedly'));
     }
     _pending.clear();
     _channel = null;
@@ -186,5 +195,10 @@ class CdpClient {
     _channel = null;
     _pending.clear();
     appLogger.d('[CdpClient] Disconnected');
+  }
+
+  void dispose() {
+    disconnect();
+    _eventController.close();
   }
 }
