@@ -1,0 +1,57 @@
+name: ours
+description: "Workspace Context Manager — open browser tabs, folders, files and processes per project context."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  flutter_riverpod: ^2.6.1
+  riverpod_annotation: ^2.6.1
+
+  # Navigation
+  go_router: ^14.6.2
+
+  # Database (Drift / SQLite)
+  drift: ^2.21.0
+  sqlite3_flutter_libs: ^0.5.24
+  path_provider: ^2.1.5
+  path: ^1.9.1
+
+  # CDP via WebSocket
+  web_socket_channel: ^3.0.1
+  http: ^1.2.2
+
+  # Desktop integration
+  tray_manager: ^0.2.3
+  window_manager: ^0.4.3
+
+  # File picker
+  file_picker: ^8.1.6
+
+  # Utilities
+  logger: ^2.5.0
+  freezed_annotation: ^2.4.4
+  json_annotation: ^4.9.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/icons/
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+  # Code generation
+  drift_dev: ^2.21.0
+  build_runner: ^2.4.13
+  riverpod_generator: ^2.6.1
+  freezed: ^2.5.7
+  json_serializable: ^6.9.0
